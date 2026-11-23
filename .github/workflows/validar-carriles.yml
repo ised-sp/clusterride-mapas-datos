@@ -1,0 +1,33 @@
+# Prueba de acierto del detector de carriles de las fotos del PNOA (solo a mano, desde «Actions»).
+name: Carriles de las fotos · acierto
+on:
+  workflow_dispatch:
+    inputs:
+      vias:
+        description: "Cuántas vías de autopista/autovía mirar"
+        default: "400"
+permissions:
+  contents: read
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - name: Programas
+        run: pip install --quiet osmium numpy scipy pillow
+      - name: OpenStreetMap de España (Geofabrik)
+        run: |
+          mkdir -p trabajo
+          curl -fsSL --retry 5 -o trabajo/spain.osm.pbf https://download.geofabrik.de/europe/spain-latest.osm.pbf
+      - name: Medir
+        working-directory: carriles-fotos
+        env:
+          CACHE_TESELAS: /tmp/pnoa
+        run: python3 validar.py ../trabajo/spain.osm.pbf "${{ inputs.vias }}" ../trabajo/acierto.json ../trabajo/casos.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acierto
+          path: |
+            trabajo/acierto.json
+            trabajo/casos.csv
