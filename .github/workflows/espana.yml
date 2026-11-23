@@ -6,6 +6,11 @@ on:
   schedule:
     - cron: "17 2 1 */2 *"
   workflow_dispatch:
+    inputs:
+      bajar_ign:
+        description: "Volver a bajar los carriles del IGN (si no, se usan los de la última versión)"
+        type: boolean
+        default: true
 permissions:
   contents: write
 concurrency:
@@ -22,7 +27,13 @@ jobs:
       - name: Carriles del IGN
         run: |
           mkdir -p trabajo salida
-          python3 espana/descargar_ign.py trabajo/ign.jsonl.gz
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.bajar_ign }}" = "false" ] && \
+             curl -fsSL --retry 3 -o trabajo/ign.jsonl.gz https://github.com/${{ github.repository }}/releases/latest/download/espana-ign-carriles.jsonl.gz; then
+            echo "Carriles del IGN de la última versión"
+          else
+            python3 espana/descargar_ign.py trabajo/ign.jsonl.gz
+          fi
+          cp trabajo/ign.jsonl.gz salida/espana-ign-carriles.jsonl.gz
       - name: OpenStreetMap de España (Geofabrik)
         run: |
           curl -fsSL --retry 5 -o trabajo/spain.osm.pbf https://download.geofabrik.de/europe/spain-latest.osm.pbf
@@ -44,5 +55,5 @@ jobs:
             cat salida/espana-carriles.json
             echo '```'
           } > notas.md
-          gh release create "$TAG" salida/espana-carriles.csv.gz salida/espana-carriles.json \
+          gh release create "$TAG" salida/espana-carriles.csv.gz salida/espana-carriles.json salida/espana-ign-carriles.jsonl.gz \
             --title "España · carriles · $(date -u +%d/%m/%Y)" --notes-file notas.md --latest

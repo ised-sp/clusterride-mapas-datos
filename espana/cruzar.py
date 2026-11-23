@@ -6,7 +6,9 @@ tienen según el IGN. Nunca se cambia un dato que ya esté en OpenStreetMap: sol
 Cómo casa: cada vía de OSM (autopistas, autovías, nacionales, autonómicas, secundarias y sus enlaces) se recorre con
 un punto cada 15 m; cada punto busca el tramo del IGN más cercano a menos de 8 m y con el mismo rumbo (±25°; en vías de
 doble sentido también el contrario). La vía recibe el valor si al menos el 70 % de sus puntos casan y el 90 % de los
-que casan dicen el mismo número de carriles.
+que casan dicen el mismo número de carriles. A una vía de doble sentido solo le valen tramos de calzada única (el IGN
+cuenta ahí los carriles de toda la vía, como OSM); a una de un sentido, los de su calzada. Y solo se rellena en las
+clases de vía en que el IGN coincide al menos un 80 % con OSM donde los dos tienen dato.
 
 Uso: python3 cruzar.py ign.jsonl.gz spain.osm.pbf salida.csv resumen.json
 Salida CSV: way_id,lanes (lo que el servidor de rutas pone en su copia de OpenStreetMap antes de construir la red).
@@ -24,6 +26,7 @@ RUMBO = 25.0           # grados
 MIN_CASAN = 0.7
 MIN_ACUERDO = 0.9
 MIN_PUNTOS = 3
+MIN_FIABLE = 0.8       # coincidencia mínima con OSM en esa clase de vía para rellenar con el IGN
 
 
 def xy(lon, lat, lat0):
@@ -54,7 +57,9 @@ def cargar_ign(ruta):
                 if ax == bx and ay == by:
                     continue
                 i = len(segs)
-                segs.append((ax, ay, bx, by, rumbo(ax, ay, bx, by), t["lanes"]))
+                # En calzada única el IGN da los carriles de toda la vía (como «lanes» de OSM en una de doble
+                # sentido); en calzadas separadas, enlaces y glorietas, los de esa calzada (una vía de un sentido).
+                segs.append((ax, ay, bx, by, rumbo(ax, ay, bx, by), t["lanes"], t.get("form") == "singleCarriageway"))
                 for gx in range(int(min(lo1, lo2) // CELDA), int(max(lo1, lo2) // CELDA) + 1):
                     for gy in range(int(min(la1, la2) // CELDA), int(max(la1, la2) // CELDA) + 1):
                         rejilla[(gx, gy)].append(i)
@@ -63,13 +68,18 @@ def cargar_ign(ruta):
 
 
 def cercano(segs, rejilla, lon, lat, rumbo_via, dos_sentidos):
+    """Tramo del IGN más cercano que vale para esta vía: a una de doble sentido solo le valen los de calzada única
+    (mismo significado de «lanes»); a una de un sentido, los de calzada separada, enlace o glorieta, y los de calzada
+    única de un sentido."""
     px, py = xy(lon, lat, 40.0)
     gx, gy = int(lon // CELDA), int(lat // CELDA)
     mejor = None
     for dx in (-1, 0, 1):
         for dy in (-1, 0, 1):
             for i in rejilla.get((gx + dx, gy + dy), ()):
-                ax, ay, bx, by, r, lanes = segs[i]
+                ax, ay, bx, by, r, lanes, unica = segs[i]
+                if dos_sentidos and not unica:
+                    continue
                 d = dif(r, rumbo_via)
                 if d > RUMBO and not (dos_sentidos and d > 180 - RUMBO):
                     continue
@@ -88,6 +98,9 @@ class Vias(osmium.SimpleHandler):
         self.res = {}
         self.est = collections.Counter()
         self.desacuerdo = collections.Counter()
+        self.comparadas = collections.Counter()   # vías con «lanes» en OSM que casan, por clase
+        self.iguales = collections.Counter()      # … y en las que OSM y el IGN dicen lo mismo
+        self.candidatas = {}                      # way_id → (clase, carriles) sin «lanes» en OSM
 
     def way(self, w):
         hw = w.tags.get("highway")
@@ -130,17 +143,28 @@ class Vias(osmium.SimpleHandler):
         osm = w.tags.get("lanes")
         if osm:
             self.est["ya_tenian"] += 1
-            if osm.strip() != str(lanes):
+            self.comparadas[hw] += 1
+            if osm.strip() == str(lanes):
+                self.iguales[hw] += 1
+            else:
                 self.desacuerdo[f"{hw}: OSM {osm} / IGN {lanes}"] += 1
             return
-        self.res[w.id] = lanes
-        self.est[f"nuevas_{hw}"] += 1
+        self.candidatas[w.id] = (hw, lanes)
 
 
 def main(ign, pbf, salida, resumen):
     segs, rejilla = cargar_ign(ign)
     h = Vias(segs, rejilla)
     h.apply_file(pbf, locations=True, idx="sparse_file_array,/tmp/nodos.idx")
+    # Solo se rellena en las clases de vía en que el IGN coincide con OSM donde los dos tienen dato (si no, el IGN
+    # está desfasado o cuenta otra cosa en esa clase y es mejor no poner nada).
+    fiable = {hw: (h.iguales[hw] / h.comparadas[hw]) if h.comparadas[hw] >= 50 else 0.0 for hw in CLASES}
+    for wid, (hw, lanes) in h.candidatas.items():
+        if fiable[hw] >= MIN_FIABLE:
+            h.res[wid] = lanes
+            h.est[f"nuevas_{hw}"] += 1
+        else:
+            h.est[f"descartadas_{hw}"] += 1
     with open(salida, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["way_id", "lanes"])
@@ -148,6 +172,8 @@ def main(ign, pbf, salida, resumen):
             w.writerow([wid, lanes])
     r = {"vias_miradas": h.est["vias"], "nuevas": len(h.res), "ya_tenian_lanes": h.est["ya_tenian"],
          "dudosas": h.est["dudosas"], "por_clase": {k[7:]: v for k, v in h.est.items() if k.startswith("nuevas_")},
+         "coincidencia_con_osm": {hw: f"{round(100 * fiable[hw])} % de {h.comparadas[hw]}" for hw in sorted(CLASES)},
+         "descartadas_por_clase_poco_fiable": {k[12:]: v for k, v in h.est.items() if k.startswith("descartadas_")},
          "desacuerdos_con_osm": dict(h.desacuerdo.most_common(30)),
          "fuente": "IGN · IGR Redes de Transporte (CC BY 4.0) · © OpenStreetMap"}
     json.dump(r, open(resumen, "w"), ensure_ascii=False, indent=1)
