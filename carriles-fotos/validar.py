@@ -38,15 +38,15 @@ class Vias(osmium.SimpleHandler):
 
 
 def recorte(pts, largo):
-    """Los LARGO metros centrales de la vía."""
+    """Los LARGO metros centrales de la vía (los puntos de los segmentos que tocan ese tramo)."""
     ini, fin = (largo - LARGO) / 2, (largo + LARGO) / 2
-    out, acc = [], 0.0
-    for a, b in zip(pts, pts[1:]):
+    idx, acc = [], 0.0
+    for i, (a, b) in enumerate(zip(pts, pts[1:])):
         d = math.hypot((b[0] - a[0]) * 85000, (b[1] - a[1]) * 110540)
         if acc + d >= ini and acc <= fin:
-            out.append(a)
+            idx += [i, i + 1]
         acc += d
-    return out + [pts[min(len(pts) - 1, len(out) + 1)]] if out else pts
+    return [pts[i] for i in sorted(set(idx))] if idx else pts
 
 
 def medir(via):
