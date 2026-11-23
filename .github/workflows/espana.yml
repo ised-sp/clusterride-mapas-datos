@@ -1,0 +1,48 @@
+# España: carriles del IGN cruzados con OpenStreetMap, cada dos meses (y a mano desde «Actions»).
+# El resultado se publica como versión (Release) del repositorio; el servidor de rutas de ClusterRide lo baja de
+# https://github.com/ised-sp/clusterride-mapas-datos/releases/latest/download/espana-carriles.csv.gz
+name: España · carriles
+on:
+  schedule:
+    - cron: "17 2 1 */2 *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: espana
+  cancel-in-progress: false
+jobs:
+  espana:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - name: Programas
+        run: pip install --quiet osmium
+      - name: Carriles del IGN
+        run: |
+          mkdir -p trabajo salida
+          python3 espana/descargar_ign.py trabajo/ign.jsonl.gz
+      - name: OpenStreetMap de España (Geofabrik)
+        run: |
+          curl -fsSL --retry 5 -o trabajo/spain.osm.pbf https://download.geofabrik.de/europe/spain-latest.osm.pbf
+          ls -lh trabajo
+      - name: Cruce
+        run: |
+          python3 espana/cruzar.py trabajo/ign.jsonl.gz trabajo/spain.osm.pbf salida/espana-carriles.csv salida/espana-carriles.json
+          gzip -9 salida/espana-carriles.csv
+          ls -lh salida
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="espana-$(date -u +%Y-%m-%d-%H%M)"
+          {
+            echo "Carriles de España del IGN (IGR Redes de Transporte, CC BY 4.0) para las vías de OpenStreetMap que no los tienen."
+            echo
+            echo '```json'
+            cat salida/espana-carriles.json
+            echo '```'
+          } > notas.md
+          gh release create "$TAG" salida/espana-carriles.csv.gz salida/espana-carriles.json \
+            --title "España · carriles · $(date -u +%d/%m/%Y)" --notes-file notas.md --latest
