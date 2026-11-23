@@ -6,6 +6,12 @@ on:
       vias:
         description: "Cuántas vías de autopista/autovía mirar"
         default: "400"
+      clases:
+        description: "Clases de vía de OSM"
+        default: "motorway,trunk"
+      largo:
+        description: "Metros de cada vía que se miran"
+        default: "600"
 permissions:
   contents: read
 jobs:
@@ -24,6 +30,8 @@ jobs:
         working-directory: carriles-fotos
         env:
           CACHE_TESELAS: /tmp/pnoa
+          CLASES: ${{ inputs.clases }}
+          LARGO: ${{ inputs.largo }}
         run: python3 validar.py ../trabajo/spain.osm.pbf "${{ inputs.vias }}" ../trabajo/acierto.json ../trabajo/casos.csv
       - uses: actions/upload-artifact@v4
         with:

@@ -9,9 +9,10 @@ import osmium
 
 import corredor as C
 
-CLASES = {"motorway", "trunk"}
+import os
+CLASES = set(os.environ.get("CLASES", "motorway,trunk").split(","))
 VENTANA = 240          # filas de 0,25 m = 60 m
-LARGO = 600.0          # m de cada vía que se miran (en el centro)
+LARGO = float(os.environ.get("LARGO", "600"))   # m de cada vía que se miran (en el centro)
 
 
 class Vias(osmium.SimpleHandler):
@@ -21,7 +22,9 @@ class Vias(osmium.SimpleHandler):
 
     def way(self, w):
         t = w.tags
-        if t.get("highway") not in CLASES or t.get("tunnel") or t.get("oneway") not in ("yes", None) or t.get("highway") == "trunk" and t.get("oneway") != "yes":
+        hw = t.get("highway")
+        # Solo calzadas de un sentido (en las de doble sentido el eje va por la línea del centro)
+        if hw not in CLASES or t.get("tunnel") or (t.get("oneway") != "yes" and not hw.startswith("motorway")):
             return
         lanes = t.get("lanes", "")
         if not lanes.isdigit() or not 1 <= int(lanes) <= 6 or t.get("lanes:psv") or t.get("lanes:bus"):
