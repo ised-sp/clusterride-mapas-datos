@@ -40,9 +40,10 @@ class Vias(osmium.SimpleHandler):
             self.vias.append((w.id, int(lanes), pts, largo))
 
 
-def recorte(pts, largo):
+def recorte(pts, largo, mirar=None):
     """Los LARGO metros centrales de la vía (los puntos de los segmentos que tocan ese tramo)."""
-    ini, fin = (largo - LARGO) / 2, (largo + LARGO) / 2
+    mirar = mirar or LARGO
+    ini, fin = (largo - mirar) / 2, (largo + mirar) / 2
     idx, acc = [], 0.0
     for i, (a, b) in enumerate(zip(pts, pts[1:])):
         d = math.hypot((b[0] - a[0]) * 85000, (b[1] - a[1]) * 110540)
@@ -52,10 +53,10 @@ def recorte(pts, largo):
     return [pts[i] for i in sorted(set(idx))] if idx else pts
 
 
-def medir(via):
+def medir(via, mirar=None):
     wid, lanes, pts, largo = via
     try:
-        img, off = C.enderezar(recorte(pts, largo))
+        img, off = C.enderezar(recorte(pts, largo, mirar))
     except Exception as e:
         return wid, lanes, None, f"error {e}"
     votos = collections.Counter()
