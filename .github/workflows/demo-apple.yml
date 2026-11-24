@@ -1,0 +1,31 @@
+name: Demo Apple Maps (vídeo del simulador)
+on: workflow_dispatch
+jobs:
+  video:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Proyecto
+        working-directory: demo-apple
+        run: brew install xcodegen && xcodegen
+      - name: Simulador
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];print([x['udid'] for k,v in d.items() if 'iOS' in k for x in v if 'iPhone' in x['name'] and 'Pro' in x['name'] and 'Max' not in x['name']][-1])")
+          echo "UDID=$UDID" >> $GITHUB_ENV
+          xcrun simctl boot $UDID; xcrun simctl bootstatus $UDID -b
+      - name: Compilar
+        working-directory: demo-apple
+        run: xcodebuild -project Demo.xcodeproj -scheme Demo -sdk iphonesimulator -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet build
+      - name: Grabar
+        run: |
+          xcrun simctl status_bar $UDID override --time "10:24" --batteryState charged --batteryLevel 100 || true
+          xcrun simctl install $UDID demo-apple/build/Build/Products/Debug-iphonesimulator/Demo.app
+          xcrun simctl launch $UDID es.clusterapps.demo.applemaps
+          sleep 15
+          xcrun simctl io $UDID recordVideo --codec h264 --force apple-maps.mp4 & REC=$!
+          sleep 46
+          kill -INT $REC; wait $REC || true
+          ls -la apple-maps.mp4
+      - uses: actions/upload-artifact@v4
+        with: { name: apple-maps, path: apple-maps.mp4 }

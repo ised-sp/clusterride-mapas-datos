@@ -1,0 +1,17 @@
+name: Demo
+options:
+  bundleIdPrefix: es.clusterapps.demo
+  deploymentTarget:
+    iOS: "18.0"
+targets:
+  Demo:
+    type: application
+    platform: iOS
+    sources: [Demo]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: es.clusterapps.demo.applemaps
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        CODE_SIGNING_ALLOWED: NO
+        SWIFT_VERSION: "5.0"
