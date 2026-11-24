@@ -25,6 +25,8 @@ class Vias(osmium.SimpleHandler):
         t = w.tags
         hw = t.get("highway")
         # Solo calzadas de un sentido (en las de doble sentido el eje va por la línea del centro)
+        if hw not in CLASES:
+            return
         un_sentido = t.get("oneway") in ("yes", "-1") or hw.startswith("motorway") or t.get("junction") == "roundabout"
         if hw not in CLASES or t.get("tunnel") or t.get("bridge") or un_sentido == DOBLE:
             return
