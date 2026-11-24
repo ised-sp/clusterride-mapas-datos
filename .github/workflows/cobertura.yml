@@ -1,0 +1,22 @@
+# Cuánta red de España tiene carriles, flechas y límite (solo a mano).
+name: Cobertura de España
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  medir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install --quiet osmium
+      - name: Datos
+        run: |
+          mkdir -p trabajo
+          curl -fsSL --retry 5 -o trabajo/spain.osm.pbf https://download.geofabrik.de/europe/spain-latest.osm.pbf
+          curl -fsSL --retry 5 -o trabajo/espana-carriles.csv.gz https://github.com/ised-sp/clusterride-mapas-datos/releases/latest/download/espana-carriles.csv.gz
+      - run: python3 medir/cobertura.py trabajo/spain.osm.pbf trabajo/espana-carriles.csv.gz trabajo/cobertura.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cobertura
+          path: trabajo/cobertura.json
