@@ -1,0 +1,28 @@
+# Qué trae Overture Maps (ODbL: OSM + datos de TomTom y oficiales) de límites en España (solo a mano).
+name: Overture · límites en España
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  medir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: DuckDB
+        run: |
+          curl -fsSL -o d.zip https://github.com/duckdb/duckdb/releases/download/v1.4.2/duckdb_cli-linux-amd64.zip && unzip -q d.zip
+      - name: Medir
+        run: |
+          R=$(aws s3 ls --no-sign-request s3://overturemaps-us-west-2/release/ | awk '{print $2}' | sort | tail -1 | tr -d /)
+          echo "Versión de Overture: $R"
+          OVERTURE="s3://overturemaps-us-west-2/release/$R" ./duckdb < medir/overture.sql
+          echo "$R" > version.txt
+          cat overture.csv fuentes.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overture
+          path: |
+            overture.csv
+            fuentes.csv
+            version.txt
