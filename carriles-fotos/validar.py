@@ -13,6 +13,7 @@ import os
 CLASES = set(os.environ.get("CLASES", "motorway,trunk").split(","))
 VENTANA = 240          # filas de 0,25 m = 60 m
 LARGO = float(os.environ.get("LARGO", "600"))   # m de cada vía que se miran (en el centro)
+DOBLE = os.environ.get("DOBLE") == "1"           # calzadas de doble sentido en vez de las de un sentido
 
 
 class Vias(osmium.SimpleHandler):
@@ -24,7 +25,8 @@ class Vias(osmium.SimpleHandler):
         t = w.tags
         hw = t.get("highway")
         # Solo calzadas de un sentido (en las de doble sentido el eje va por la línea del centro)
-        if hw not in CLASES or t.get("tunnel") or (t.get("oneway") != "yes" and not hw.startswith("motorway")):
+        un_sentido = t.get("oneway") in ("yes", "-1") or hw.startswith("motorway") or t.get("junction") == "roundabout"
+        if hw not in CLASES or t.get("tunnel") or t.get("bridge") or un_sentido == DOBLE:
             return
         lanes = t.get("lanes", "")
         if not lanes.isdigit() or not 1 <= int(lanes) <= 6 or t.get("lanes:psv") or t.get("lanes:bus"):
@@ -63,7 +65,7 @@ def medir(via, mirar=None):
     n = 0
     for k in range(0, img.shape[0] - VENTANA + 1, VENTANA):
         n += 1
-        r, _ = C.analizar(img[k:k + VENTANA], off)
+        r, _ = (C.analizar_doble if DOBLE else C.analizar)(img[k:k + VENTANA], off)
         if r:
             votos[r] += 1
     if not votos or sum(votos.values()) < 0.5 * n:
@@ -76,7 +78,13 @@ def main(pbf, n, salida, casos):
     h = Vias()
     h.apply_file(pbf, locations=True, idx="sparse_file_array,/tmp/nodos.idx")
     random.seed(7)
-    muestra = random.sample(h.vias, min(int(n), len(h.vias)))
+    if DOBLE:   # mitad de 2 carriles y mitad del resto, para que el 2 (lo normal) no tape los fallos
+        dos = [v for v in h.vias if v[1] == 2]
+        otras = [v for v in h.vias if v[1] != 2]
+        k = min(int(n) // 2, len(otras))
+        muestra = random.sample(otras, k) + random.sample(dos, min(int(n) - k, len(dos)))
+    else:
+        muestra = random.sample(h.vias, min(int(n), len(h.vias)))
     print(f"{len(h.vias)} vías candidatas; se miran {len(muestra)}", flush=True)
     res = []
     with cf.ThreadPoolExecutor(6) as ex:

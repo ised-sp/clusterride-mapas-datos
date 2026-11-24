@@ -128,3 +128,32 @@ def analizar(img, off, paso=0.25, umbral=22.0):
     if len(huecos) == 0 or not all(2.5 <= g <= 4.5 for g in huecos):
         return None, lin
     return len(huecos), lin
+
+
+def analizar_doble(img, off, paso=0.25, umbral=22.0):
+    """Calzada de doble sentido (el eje de OSM va más o menos por la línea del centro, que puede ser continua o
+    discontinua). Carriles = la cadena más larga de líneas seguidas, todas separadas por anchura de carril, que
+    pasa por el eje y acaba a los dos lados en una línea de borde (continua, o discontinua marcada en ≥30 %)."""
+    fondo = ndimage.median_filter(img, size=(1, int(1.5 / paso) | 1))
+    th = img - fondo
+    blanco = (th > umbral).astype(np.float32)
+    blanco = ndimage.maximum_filter1d(blanco, size=2, axis=1)
+    frac = ndimage.gaussian_filter1d(blanco.mean(axis=0), 0.7)
+    picos, _ = signal.find_peaks(frac, height=0.12, distance=int(1.6 / paso))
+    lin = [(float(off[p]), float(frac[p])) for p in picos]
+    mejor = None
+    for i in range(len(lin)):
+        for j in range(i + 1, len(lin)):
+            cad = lin[i:j + 1]
+            xs = [x for x, _ in cad]
+            if not (xs[0] < -1.5 and xs[-1] > 1.5):
+                continue
+            if cad[0][1] < 0.3 or cad[-1][1] < 0.3:
+                continue
+            if not all(2.5 <= g <= 4.5 for g in np.diff(xs)):
+                continue
+            if mejor is None or len(cad) > len(mejor):
+                mejor = cad
+    if mejor is None:
+        return None, lin
+    return len(mejor) - 1, lin
