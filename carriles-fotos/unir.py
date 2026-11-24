@@ -20,7 +20,7 @@ def main(ign, salida, resumen, *fotos):
         with open(p) as f:
             for r in csv.DictReader(f):
                 w = r["way_id"]
-                if w in res and r["highway"].endswith("_link"):
+                if w in res and (r["highway"].endswith("_link") or r["highway"].endswith(":doble")):
                     continue
                 if w in res and res[w] != r["lanes"]:
                     cambiadas += 1

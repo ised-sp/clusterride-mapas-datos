@@ -13,6 +13,9 @@ import osmium
 import validar as V
 
 CLASES = {"motorway", "trunk", "motorway_link", "trunk_link"}
+# Doble sentido: medido (24/11/2026, 400 vías) acierta el 98,6 % cuando dice 3 (2+1 con carril de adelantamiento),
+# pero el 2 y el 1 fallan más y el 2 ya es lo que se supone sin dato: de estas solo se apuntan las de 3.
+DOBLE = {"trunk", "primary", "secondary"}
 
 
 class SinCarriles(osmium.SimpleHandler):
@@ -23,8 +26,14 @@ class SinCarriles(osmium.SimpleHandler):
     def way(self, w):
         t = w.tags
         hw = t.get("highway")
-        if hw not in CLASES or t.get("tunnel") or t.get("lanes") or (t.get("oneway") != "yes" and not hw.startswith("motorway")):
+        if hw not in CLASES and hw not in DOBLE:
             return
+        un_sentido = t.get("oneway") in ("yes", "-1") or hw.startswith("motorway") or t.get("junction") == "roundabout"
+        if t.get("tunnel") or t.get("bridge") or t.get("lanes"):
+            return
+        if un_sentido and hw not in CLASES:
+            return
+        doble = not un_sentido
         try:
             pts = [(n.lon, n.lat) for n in w.nodes]
         except osmium.InvalidLocationError:
@@ -32,27 +41,29 @@ class SinCarriles(osmium.SimpleHandler):
         if not (-9.5 < pts[0][0] < 4.5 and 35.8 < pts[0][1] < 43.9):
             return
         largo = sum(math.hypot((b[0] - a[0]) * 85000, (b[1] - a[1]) * 110540) for a, b in zip(pts, pts[1:]))
-        minimo = 160 if hw.endswith("_link") else 300
-        if largo >= minimo:
-            self.vias.append((w.id, 0, pts, largo, hw))
+        if largo >= (300 if doble else 160):
+            self.vias.append((w.id, 0, pts, largo, hw, doble))
 
 
 def medir(via):
-    wid, _, pts, largo, hw = via
+    wid, _, pts, largo, hw, doble = via
     mirar = 200.0 if hw.endswith("_link") else 600.0
     if largo < mirar + 100:
         mirar = max(100.0, largo - 60)
-    r = V.medir((wid, 0, pts, largo), mirar)
-    return wid, hw, r[2]
+    r = V.medir((wid, 0, pts, largo), mirar, doble)
+    lanes = r[2]
+    if doble and lanes != 3:
+        lanes = None
+    return wid, hw + ("" if not doble else ":doble"), lanes
 
 
 def main(pbf, salida, resumen, minutos="300"):
     t0 = time.time()
     h = SinCarriles()
     h.apply_file(pbf, locations=True, idx="sparse_file_array,/tmp/nodos2.idx")
-    # Primero los troncos (más valor), luego los enlaces.
     parte, partes = int(os.environ.get("PARTE", "0")), int(os.environ.get("PARTES", "1"))
-    vias = sorted((v for v in h.vias if v[0] % partes == parte), key=lambda v: v[4].endswith("_link"))
+    # Primero las calzadas de un sentido, luego los enlaces y al final las de doble sentido.
+    vias = sorted((v for v in h.vias if v[0] % partes == parte), key=lambda v: (v[5], v[4].endswith("_link")))
     print(f"{len(vias)} vías sin carriles", flush=True)
     res, mirados = {}, collections.Counter()
     limite = t0 + float(minutos) * 60

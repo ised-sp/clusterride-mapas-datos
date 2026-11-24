@@ -1,5 +1,5 @@
-# Carriles de las fotos del PNOA para las autopistas y autovías de OpenStreetMap sin «lanes».
-# Cada dos meses (después de la vuelta del IGN) y a mano. Cuatro trozos a la vez; al final se junta
+# Carriles de las fotos del PNOA para las vías de OpenStreetMap sin «lanes» (un sentido: autopistas, autovías y enlaces; doble sentido: solo las de 3 carriles).
+# Cada dos meses (después de la vuelta del IGN) y a mano. Seis trozos a la vez; al final se junta
 # con los del IGN y se publica como la última versión (la que baja regiones.sh).
 name: Carriles de las fotos
 on:
@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        parte: [0, 1, 2, 3]
+        parte: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
       - name: Programas
@@ -33,7 +33,7 @@ jobs:
         env:
           CACHE_TESELAS: /tmp/pnoa
           PARTE: ${{ matrix.parte }}
-          PARTES: "4"
+          PARTES: "6"
           HILOS: "6"
         run: python3 detectar.py ../trabajo/spain.osm.pbf ../trabajo/fotos-${{ matrix.parte }}.csv ../trabajo/fotos-${{ matrix.parte }}.json "${{ inputs.minutos || '300' }}"
       - uses: actions/upload-artifact@v4

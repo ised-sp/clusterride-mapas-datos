@@ -57,7 +57,8 @@ def recorte(pts, largo, mirar=None):
     return [pts[i] for i in sorted(set(idx))] if idx else pts
 
 
-def medir(via, mirar=None):
+def medir(via, mirar=None, doble=None):
+    doble = DOBLE if doble is None else doble
     wid, lanes, pts, largo = via
     try:
         img, off = C.enderezar(recorte(pts, largo, mirar))
@@ -67,7 +68,7 @@ def medir(via, mirar=None):
     n = 0
     for k in range(0, img.shape[0] - VENTANA + 1, VENTANA):
         n += 1
-        r, _ = (C.analizar_doble if DOBLE else C.analizar)(img[k:k + VENTANA], off)
+        r, _ = (C.analizar_doble if doble else C.analizar)(img[k:k + VENTANA], off)
         if r:
             votos[r] += 1
     if not votos or sum(votos.values()) < 0.5 * n:
