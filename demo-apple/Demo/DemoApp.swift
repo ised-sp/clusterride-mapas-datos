@@ -59,7 +59,7 @@ struct ContentView: View {
 
     var style: MapStyle {
         switch sim.phase {
-        case 1: return .hybrid(elevation: .realistic, pointsOfInterest: .excludingAll)
+        case 2: return .hybrid(elevation: .realistic, pointsOfInterest: .excludingAll)
         default: return .standard(elevation: .realistic, emphasis: .automatic, pointsOfInterest: .excludingAll, showsTraffic: false)
         }
     }
@@ -73,10 +73,10 @@ struct ContentView: View {
         }
         .mapStyle(style)
         .mapControlVisibility(.hidden)
-        .preferredColorScheme(sim.phase == 2 ? .dark : .light)
+        .preferredColorScheme(sim.phase == 3 ? .dark : .light)
         .ignoresSafeArea()
         .overlay(alignment: .top) {
-            Text(["Apple Maps · Estándar (día)", "Apple Maps · Híbrido", "Apple Maps · Estándar (noche)"][sim.phase])
+            Text(["Apple Maps · Estándar (día)", "Apple Maps · Vista aérea de la sierra", "Apple Maps · Híbrido", "Apple Maps · Estándar (noche)"][sim.phase])
                 .font(.system(size: 15, weight: .semibold)).padding(.horizontal, 14).padding(.vertical, 8)
                 .background(.ultraThinMaterial, in: Capsule()).padding(.top, 60)
         }
@@ -91,20 +91,21 @@ struct ContentView: View {
         h += diff * 0.15; head = h
         sim.pos = here
         // la cámara mira por delante del icono para dejarlo abajo en la pantalla
-        let ahead = sim.at(s + 120)
+        let aerial = sim.phase == 1
+        let ahead = sim.at(s + (aerial ? 900 : 70))
         withAnimation(.linear(duration: tick)) {
-            cam = .camera(MapCamera(centerCoordinate: ahead, distance: 420, heading: h, pitch: 72))
+            cam = .camera(MapCamera(centerCoordinate: ahead, distance: aerial ? 3200 : 650, heading: h, pitch: aerial ? 72 : 68))
         }
     }
 
     func run() async {
         // calentar: dejar que cargue el primer tramo con cada estilo
-        for ph in [0, 1, 2, 0] { sim.phase = ph; s = 0; place(); try? await Task.sleep(nanoseconds: 3_000_000_000) }
+        for ph in [0, 1, 2, 3, 0] { sim.phase = ph; s = Double(ph) * 1000; place(); try? await Task.sleep(nanoseconds: 3_000_000_000) }
         try? await Task.sleep(nanoseconds: 4_000_000_000)
-        let per = 14.0   // segundos por estilo
-        for ph in 0..<3 {
+        let per = 10.5   // segundos por estilo
+        for ph in 0..<4 {
             sim.phase = ph
-            let start = Double(ph) * 1300
+            let start = Double(ph) * 1000
             s = start
             let steps = Int(per / tick)
             for _ in 0..<steps {
