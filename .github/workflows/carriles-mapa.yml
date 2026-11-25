@@ -1,7 +1,8 @@
-# Carriles para pintarlos en el mapa de ClusterRide (teselas PMTiles, capa «carriles»), cada dos meses después del
-# cruce con el IGN (espana.yml, el día 1) y a mano desde «Actions». Se publica en la versión fija «mapa-carriles»:
+# Carriles para pintarlos en el mapa de ClusterRide (teselas PMTiles, capa «carriles») en toda Europa, cada dos meses
+# después del cruce con el IGN (espana.yml, el día 1) y a mano desde «Actions». Los países van en grupos en paralelo y al
+# final se juntan. Se publica en la versión fija «mapa-carriles»:
 # https://github.com/ised-sp/clusterride-mapas-datos/releases/download/mapa-carriles/carriles.pmtiles
-# El Plesk lo baja con regiones.sh a /opt/clusterride-mapas/datos/carriles.pmtiles (https://clusterride.clusterapps.es/mapas/carriles.pmtiles).
+# El Plesk lo baja con carriles-mapa.sh (lo llama regiones.sh) a /opt/clusterride-mapas/datos/carriles.pmtiles.
 name: Mapa · carriles
 on:
   schedule:
@@ -13,47 +14,83 @@ concurrency:
   group: carriles-mapa
   cancel-in-progress: false
 jobs:
-  carriles:
+  paises:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        grupo:
+          - "spain portugal andorra"
+          - "france monaco"
+          - "germany"
+          - "italy switzerland liechtenstein austria"
+          - "great-britain:izquierda ireland-and-northern-ireland:izquierda malta:izquierda cyprus:izquierda iceland"
+          - "belgium netherlands luxembourg denmark"
+          - "norway sweden finland estonia latvia lithuania"
+          - "poland czech-republic slovakia hungary"
+          - "slovenia croatia bosnia-herzegovina serbia montenegro albania macedonia kosovo"
+          - "romania bulgaria greece moldova"
+          - "ukraine belarus"
     steps:
       - uses: actions/checkout@v4
       - name: Programas
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq osmium-tool >/dev/null
-          sudo apt-get install -y -qq tippecanoe >/dev/null 2>&1 || {
-            git clone -q --depth 1 https://github.com/felt/tippecanoe.git /tmp/tc && make -C /tmp/tc -j4 >/dev/null && sudo make -C /tmp/tc install >/dev/null; }
+          sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool >/dev/null
           pip install --quiet osmium
-          tippecanoe --version; osmium --version | head -1
-      - name: OpenStreetMap (España, Portugal y Andorra) y carriles del IGN
-        run: |
-          mkdir -p trabajo salida
-          for p in spain portugal andorra; do
-            curl -fsSL --retry 5 --retry-all-errors --retry-delay 20 --max-time 1800 -o trabajo/$p.osm.pbf https://download.geofabrik.de/europe/$p-latest.osm.pbf || \
-            curl -fsSL --retry 5 --retry-all-errors --retry-delay 20 --max-time 1800 -o trabajo/$p.osm.pbf https://download.openstreetmap.fr/extracts/europe/$p-latest.osm.pbf
-          done
-          curl -fsSL --retry 3 -o trabajo/espana-carriles.csv.gz https://github.com/${{ github.repository }}/releases/latest/download/espana-carriles.csv.gz
-          ls -lh trabajo
       - name: Calzadas con carriles
         run: |
-          : > trabajo/carriles.geojsonl
-          for p in spain portugal andorra; do
-            osmium tags-filter -O -o trabajo/$p-vias.osm.pbf trabajo/$p.osm.pbf \
+          mkdir -p trabajo salida
+          curl -fsSL --retry 3 -o trabajo/espana-carriles.csv.gz https://github.com/${{ github.repository }}/releases/latest/download/espana-carriles.csv.gz || true
+          : > salida/carriles.geojsonl
+          for x in ${{ matrix.grupo }}; do
+            p=${x%%:*}; mano=""; [ "$x" != "$p" ] && mano=${x#*:}
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 20 --max-time 3000 -o trabajo/p.osm.pbf https://download.geofabrik.de/europe/$p-latest.osm.pbf || \
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 20 --max-time 3000 -o trabajo/p.osm.pbf https://download.openstreetmap.fr/extracts/europe/$p-latest.osm.pbf || { echo "SIN $p"; continue; }
+            osmium tags-filter -O -o trabajo/vias.osm.pbf trabajo/p.osm.pbf \
               w/highway=motorway,motorway_link,trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link,unclassified,residential
-            python3 mapa/carriles_mapa.py trabajo/$p-vias.osm.pbf trabajo/espana-carriles.csv.gz >> trabajo/carriles.geojsonl
+            rm -f trabajo/p.osm.pbf
+            n0=$(wc -l < salida/carriles.geojsonl)
+            python3 mapa/carriles_mapa.py trabajo/vias.osm.pbf trabajo/espana-carriles.csv.gz $mano >> salida/carriles.geojsonl
+            echo "$p: $(( $(wc -l < salida/carriles.geojsonl) - n0 )) calzadas"
+            rm -f trabajo/vias.osm.pbf
           done
-          wc -l trabajo/carriles.geojsonl
+          gzip -1 salida/carriles.geojsonl
+          echo "N=$(echo '${{ matrix.grupo }}' | tr ' :' '__')" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carriles-${{ env.N }}
+          path: salida/carriles.geojsonl.gz
+          retention-days: 2
+  teselas:
+    needs: paises
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: partes
+      - name: Programas
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tippecanoe >/dev/null 2>&1 || {
+            git clone -q --depth 1 https://github.com/felt/tippecanoe.git /tmp/tc && make -C /tmp/tc -j4 >/dev/null && sudo make -C /tmp/tc install >/dev/null; }
       - name: Teselas
         run: |
-          tippecanoe -o salida/carriles.pmtiles -l carriles -Z14 -z14 --no-feature-limit --no-tile-size-limit \
-            --attribution "© OpenStreetMap · Carriles: IGN (IGR-RT, CC BY 4.0)" --force -P trabajo/carriles.geojsonl
-          ls -lh salida
+          ls -la partes/*
+          zcat partes/*/carriles.geojsonl.gz > carriles.geojsonl
+          N=$(wc -l < carriles.geojsonl); echo "N=$N" >> "$GITHUB_ENV"; echo "$N calzadas"
+          [ "$N" -gt 100000 ] || { echo "Muy pocas calzadas: no se publica"; exit 1; }
+          tippecanoe -o carriles.pmtiles -l carriles -Z14 -z14 --no-feature-limit --no-tile-size-limit \
+            --attribution "© OpenStreetMap · Carriles: IGN (IGR-RT, CC BY 4.0)" --force -P carriles.geojsonl
+          ls -lh carriles.pmtiles
       - name: Publicar
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release delete mapa-carriles --yes --cleanup-tag 2>/dev/null || true
-          gh release create mapa-carriles salida/carriles.pmtiles --latest=false \
+          gh release create mapa-carriles carriles.pmtiles --latest=false \
             --title "Mapa · carriles · $(date -u +%d/%m/%Y)" \
-            --notes "Calzadas de España, Portugal y Andorra con su número de carriles (OpenStreetMap y, donde no los tiene, IGN) para el mapa de ClusterRide. $(wc -l < trabajo/carriles.geojsonl) calzadas."
+            --notes "Calzadas de Europa con su número de carriles (OpenStreetMap y, en España donde no los tiene, IGN) para el mapa de ClusterRide. $N calzadas."

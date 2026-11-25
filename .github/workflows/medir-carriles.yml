@@ -1,0 +1,27 @@
+# Tasa de acierto de los carriles de OpenStreetMap: se comparan con los del IGN (fuente oficial independiente) en todas
+# las vías de España donde los dos tienen dato, por clase de vía. Solo mide: no publica nada (solo a mano).
+name: Carriles · tasa de acierto (España, contra el IGN)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  medir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: Programas
+        run: pip install --quiet osmium
+      - name: Datos
+        run: |
+          mkdir -p trabajo
+          curl -fsSL --retry 3 -o trabajo/ign.jsonl.gz https://github.com/${{ github.repository }}/releases/latest/download/espana-ign-carriles.jsonl.gz
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 20 --max-time 1800 -o trabajo/spain.osm.pbf https://download.geofabrik.de/europe/spain-latest.osm.pbf || \
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 20 --max-time 1800 -o trabajo/spain.osm.pbf https://download.openstreetmap.fr/extracts/europe/spain-latest.osm.pbf
+      - name: Comparar
+        run: python3 espana/cruzar.py trabajo/ign.jsonl.gz trabajo/spain.osm.pbf trabajo/x.csv trabajo/acierto.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acierto
+          path: trabajo/acierto.json

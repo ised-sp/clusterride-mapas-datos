@@ -6,14 +6,17 @@ el dibujo: sentido único con 2 o más, y doble sentido con 4 o más o con lanes
 
 Cada línea va en el sentido de la marcha (las oneway=-1 se dan la vuelta) y lleva:
   n  carriles de la calzada                   c  clase como la de OpenMapTiles (motorway, trunk, primary, secondary,
-  b  carriles del sentido contrario, a la        tertiary, minor)
-     izquierda (0 en sentido único)           br bridge | tunnel | "" ;  r = 1 si es enlace
+  b  carriles a la IZQUIERDA de la línea, del    tertiary, minor)
+     otro sentido (0 en sentido único); en    br bridge | tunnel | "" ;  r = 1 si es enlace
+     los países de conducción por la izquierda lh = 1 en los países que circulan por la izquierda
+     son los del propio sentido
 No se inventa nada: un doble sentido con un número impar de carriles y sin lanes:forward/backward no se sabe cómo se
 reparte y se deja fuera (el mapa lo sigue pintando como siempre).
 
-Uso: python3 carriles_mapa.py <osm.pbf> [espana-carriles.csv.gz] > carriles.geojsonl
+Uso: python3 carriles_mapa.py <osm.pbf> [espana-carriles.csv.gz] [izquierda] > carriles.geojsonl
+(«izquierda» para Reino Unido, Irlanda, Malta y Chipre)
 """
-import csv, gzip, json, sys
+import csv, gzip, json, os, sys
 import osmium
 
 CLASE = {"motorway": "motorway", "motorway_link": "motorway", "trunk": "trunk", "trunk_link": "trunk",
@@ -27,8 +30,9 @@ def entero(v):
     except Exception:
         return None
 
+IZQ = len(sys.argv) > 3 and sys.argv[3] == "izquierda"
 ign = {}
-if len(sys.argv) > 2:
+if len(sys.argv) > 2 and os.path.exists(sys.argv[2]):
     for r in csv.reader(gzip.open(sys.argv[2], "rt")):
         if r and r[0].isdigit(): ign[int(r[0])] = entero(r[1])
 
@@ -51,7 +55,7 @@ class H(osmium.SimpleHandler):
             b = 0
         else:
             f, k = entero(t.get("lanes:forward")), entero(t.get("lanes:backward"))
-            if f and k and f + k >= 3: n, b = f + k, k
+            if f and k and f + k >= 3: n, b = f + k, (f if IZQ else k)
             elif n and n >= 4 and n % 2 == 0: b = n // 2
             else: return
         try:
@@ -62,6 +66,7 @@ class H(osmium.SimpleHandler):
         if rev: pts.reverse()
         br = "bridge" if t.get("bridge") not in (None, "no") else ("tunnel" if t.get("tunnel") not in (None, "no") else "")
         props = {"n": n, "b": b, "c": c, "br": br, "r": 1 if hw.endswith("_link") else 0}
+        if IZQ: props["lh"] = 1
         sys.stdout.write(json.dumps({"type": "Feature", "properties": props,
                                      "geometry": {"type": "LineString", "coordinates": pts}}, separators=(",", ":")) + "\n")
         s.n += 1; s.de_ign += fuente_ign
