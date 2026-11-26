@@ -40,7 +40,9 @@ jobs:
         run: |
           [ -n "$MAPILLARY_TOKEN" ] || { echo "Falta el secreto MAPILLARY_TOKEN"; exit 1; }
           python3 senales/mapillary_velocidad.py "-9.6,35.8,4.4,43.9;-18.3,27.5,-13.3,29.5" senales-velocidad.json.gz estado.json.gz
-          ls -lh senales-velocidad.json.gz estado.json.gz
+          # lo de la API de entidades (peligros, adelantar, cruces…): las teselas que falten y las dos salidas juntas
+          HILOS=96 TIEMPO_MAX=7200 python3 senales/mapillary_graph.py estado.json.gz senales-velocidad.json.gz senales-ruta.json.gz
+          ls -lh senales-velocidad.json.gz senales-ruta.json.gz estado.json.gz
       - name: Guardar el estado
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,6 +59,6 @@ jobs:
           [ "${N:-0}" -gt 500 ] || { echo "Muy pocas señales (${N:-0}): no se publica"; exit 0; }
           gh release view senales-velocidad >/dev/null 2>&1 || gh release create senales-velocidad --latest=false \
             --title "Señales de velocidad" --notes "Señales de velocidad máxima de Mapillary."
-          gh release upload senales-velocidad senales-velocidad.json.gz --clobber
+          gh release upload senales-velocidad senales-velocidad.json.gz senales-ruta.json.gz --clobber
           gh release edit senales-velocidad --title "Señales de velocidad · $(date -u +%d/%m/%Y)" \
             --notes "Señales de velocidad máxima y fin de velocidad máxima detectadas por Mapillary en España, Portugal, Andorra y Canarias, con su sentido. $N señales; teselas repasadas $HECHAS de $TOTAL. © Mapillary, CC BY-SA 4.0."
