@@ -10,7 +10,7 @@ Uso: python3 carriles_reales.py <osm.pbf> [espana-carriles.csv.gz] [izquierda] >
 """
 import csv, gzip, json, math, os, sys, time, traceback
 from collections import defaultdict
-from multiprocessing import Pool
+import multiprocessing as mp
 import numpy as np
 import osmium
 from shapely.geometry import box
@@ -156,7 +156,8 @@ def main():
     print(f"celdas: {len(jobs)}", file=sys.stderr)
     n = 0
     errs = 0
-    with Pool(os.cpu_count() or 2) as pool:
+    # «fork»: los procesos heredan las vías ya leídas (en Python 3.14 el modo por defecto ya no es este)
+    with mp.get_context("fork").Pool(os.cpu_count() or 2) as pool:
         for k, (i, j, lines, err) in enumerate(pool.imap_unordered(celda, jobs, chunksize=1)):
             if err:
                 errs += 1

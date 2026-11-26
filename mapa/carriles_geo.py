@@ -150,6 +150,7 @@ class Chain:
         self.closed = len(nodes) > 3 and nodes[0] == nodes[-1]
         pc0 = parts[0][0]
         self.base, self.link, self.rb = pc0.base, pc0.link, pc0.rb
+        self.urban = any(pc.urban for pc, _ in parts)
         self.rank = RANK[self.base] - (0.5 if self.link else 0)
 
     # --- muestreo ----------------------------------------------------------------------------------------------
@@ -501,10 +502,14 @@ class Network:
         for (m, mi) in through:
             if not m.oneway:
                 continue
+            # pegado solo en vías rápidas (en ciudad, un ramal es un cruce más: la calzada conserva sus rayas)
+            fast_main = m.base in ("motorway", "trunk") or m.link
             hm_out = m.heading_at(mi, True)
             hm_in = m.heading_at(mi, False)
             for (b, bi) in ends:
                 if not b.oneway or id(b) in handled:
+                    continue
+                if not (fast_main or (m.base == "primary" and b.link and not m.urban)):
                     continue
                 if bi == 0:          # sale del nodo: desdoble
                     hb = b.heading_at(0, True)
@@ -650,23 +655,36 @@ class Network:
             idx = np.arange(len(b.p) - 1, max(-1, len(b.p) - 1 - int(450 / DS)), -1)
         if len(E) < 2 or len(idx) < 2:
             return
+        # como mucho media calzada (un ramal corto puede ir pegado por los dos extremos)
+        half = b.L / 2
+        dd = b.s[idx] if at == "start" else b.L - b.s[idx]
+        idx = idx[dd <= max(half, 20.0)]
+        if len(idx) < 2:
+            return
         face = b.inner if side == "R" else b.outer
         q = b.p[idx] + b.nrm[idx] * face[idx, None]
         # distancia con signo al borde (positiva = hacia fuera de la calzada)
-        signed = signed_dist(q, E, Et)
+        signed, et = signed_dist(q, E, Et, tangents=True)
         gap = -signed if side == "R" else signed
         dist = b.s[idx] if at == "start" else b.L - b.s[idx]
         R = 70.0 if m.base in ("motorway", "trunk") else 35.0
         ramp = smooth(dist / R)
         g = np.maximum(0, gap) * ramp
         delta = g - gap
-        # deja de mirar cuando el ramal ya se ha ido lejos
-        far = np.nonzero(gap > 18)[0]
+        # deja de mirar cuando el ramal ya se ha ido lejos o gira y deja de ir junto a la calzada
+        tb = b.t[idx]
+        cosang = np.abs(np.sum(tb * et, axis=1))
+        away = (gap > 18) | (cosang < math.cos(math.radians(35)))
+        far = np.nonzero(away)[0]
         if len(far):
             cut = far[0]
             fade = smooth(1 - (np.arange(len(idx)) - cut) / 10.0)
             delta = np.where(np.arange(len(idx)) >= cut, delta * fade, delta)
         delta = np.where(np.abs(delta) > 25, 0, delta)
+        if len(delta) > 8:
+            d0 = delta[0]
+            delta = gauss(delta, 2.5)
+            delta[0] = d0
         # sobre el eje del ramal: hacia fuera de la calzada = a su derecha si va a la derecha
         sh = -delta if side == "R" else delta
         b.shift[idx] += sh
@@ -809,6 +827,42 @@ class Network:
                     if bpass and not apass:
                         priority_hits[id(a)].append((bpoly, nd, ai))
             self.junction_nodes.append((nd, items))
+        # calzadas que se cruzan sin nodo común al mismo nivel (giros dentro de un cruce, datos sin unir): la más
+        # importante conserva sus rayas; la otra las corta (y si son iguales, las dos)
+        tree_a = STRtree([a[0] for a in asph])
+        connected = set()
+        for nd, ks in self.node_chains.items():
+            ks = list(ks)
+            for x in ks:
+                for y in ks:
+                    connected.add((id(self.chains[x]), id(self.chains[y])))
+        for k, (poly, ch, lv, tun) in enumerate(asph):
+            for j in tree_a.query(poly, predicate="intersects"):
+                op, oc, olv, otun = asph[j]
+                if oc is ch or olv != lv or (id(ch), id(oc)) in connected or (id(ch), id(oc)) in self.glued \
+                        or (id(oc), id(ch)) in self.glued:
+                    continue
+                inter = poly.intersection(op)
+                if inter.is_empty or inter.area < 2:
+                    continue
+                c = np.array(inter.centroid.coords[0])
+                ja = int(np.argmin(np.hypot(*(ch.p - c).T)))
+                jb = int(np.argmin(np.hypot(*(oc.p - c).T)))
+                if abs(float(np.dot(ch.t[ja], oc.t[jb]))) > math.cos(math.radians(30)):
+                    continue        # van en paralelo: no es un cruce
+                cut_edge[id(ch)].append(op)
+                if oc.rank >= ch.rank:
+                    cut_all[id(ch)].append(op)
+        # un ramal pegado no pinta nada dentro de los carriles de la calzada de la que sale o a la que llega
+        for job in self.glue_jobs:
+            if job[0] != "branch":
+                continue
+            m, b = job[1], job[3]
+            mp = [lp[0] for lp in lane_polys if lp[1] is m]
+            if mp:
+                inside = unary_union(mp).buffer(-0.3)
+                if not inside.is_empty:
+                    cut_all[id(b)].append(inside)
         # rayas
         lane_tree = STRtree([lp[0] for lp in lane_polys])
         for ch in chains:
@@ -866,9 +920,7 @@ class Network:
                 continue
             base = max(items, key=lambda x: x[0].rank)[0]
             low = min(items, key=lambda x: x[0].rank)[0]
-            r = 4.0 if base.base in ("tertiary", "secondary") else 7.0
-            if any(c.rb for c, _, _ in items):
-                r = 5.0
+            r = 3.5
             disk = Point(self.P[nd]).buffer(28)
             local = u.intersection(disk)
             if local.is_empty:
@@ -1164,7 +1216,7 @@ class Network:
                     self.gore_between(a, "L", bb, "L", "start" if ai == 0 else "end", t.base, dual=True, out=out)
 
     def gore_between(self, m, mside, b, bside, at, base, both_branches=False, dual=False, out=None):
-        gmax = 9.0 if base in ("motorway", "trunk") else (3.5 if base == "primary" else 2.5)
+        gmax = 7.0 if base in ("motorway", "trunk") else (3.5 if base == "primary" else 2.5)
         if dual:
             gmax = 2.5
         eb = (b.inner if bside == "L" else b.outer)
@@ -1174,7 +1226,7 @@ class Network:
         rng = range(0, len(bl)) if at == "start" else range(len(bl) - 1, -1, -1)
         side_pts, opp_pts = [], []
         started = False
-        maxlen = 160.0 if base in ("motorway", "trunk") else 70.0
+        maxlen = 120.0 if base in ("motorway", "trunk") else 60.0
         s_start = None
         for i in rng:
             q = Point(bl[i])
@@ -1285,9 +1337,10 @@ def ribbon(ch, left, right, i0, i1, ext=1.0):
     return poly
 
 
-def signed_dist(q, E, Et):
+def signed_dist(q, E, Et, tangents=False):
     """Distancia con signo (izquierda +) de los puntos q a la polilínea E con tangentes Et."""
     out = np.zeros(len(q))
+    tout = np.zeros((len(q), 2))
     for k, p in enumerate(q):
         d = np.hypot(*(E - p).T)
         j = int(np.argmin(d))
@@ -1309,7 +1362,8 @@ def signed_dist(q, E, Et):
             bd = float(d[j])
         cross = bt[0] * (p - best)[1] - bt[1] * (p - best)[0]
         out[k] = bd if cross >= 0 else -bd
-    return out
+        tout[k] = bt
+    return (out, tout) if tangents else out
 
 
 def classify_edge(ch, sg, probe, tdir, lane_polys, tree):
