@@ -1,13 +1,18 @@
 # Señales de velocidad de Mapillary (España, Portugal, Andorra y Canarias) para el límite de cada punto de la carretera
-# en ClusterRide. Cada mes y a mano. Necesita el secreto MAPILLARY_TOKEN (Client Token de Mapillary, solo lectura).
-# Se publica en la versión fija «senales-velocidad»:
+# en ClusterRide. Todos los días y a mano. Necesita el secreto MAPILLARY_TOKEN (Client Token de Mapillary, solo lectura).
+# Mapillary deja 50.000 teselas al día: cada pasada pide unas 40.000 (las que nunca se han pedido y luego las más
+# viejas) y guarda lo bajado en la versión «senales-estado»; la salida va con todo lo que hay en el estado. Se publica en:
 # https://github.com/ised-sp/clusterride-mapas-datos/releases/download/senales-velocidad/senales-velocidad.json.gz
 # Datos de Mapillary, CC BY-SA 4.0 («© Mapillary»).
 name: Señales de velocidad (Mapillary)
 on:
   schedule:
-    - cron: "17 2 7 * *"
+    - cron: "17 2 * * *"
   workflow_dispatch:
+    inputs:
+      presupuesto:
+        description: "Teselas de Mapillary en esta pasada (el tope es 50.000 al día)"
+        default: "40000"
 permissions:
   contents: write
 concurrency:
@@ -21,22 +26,36 @@ jobs:
       - uses: actions/checkout@v4
       - name: Programas
         run: pip install --quiet mapbox-vector-tile
+      - name: Estado
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release download senales-estado -p estado.json.gz || echo "Sin estado: se empieza de cero"
       - name: Señales
         env:
           MAPILLARY_TOKEN: ${{ secrets.MAPILLARY_TOKEN }}
-          HILOS: "32"
+          HILOS: "8"
+          PRESUPUESTO: ${{ inputs.presupuesto || '40000' }}
         run: |
           [ -n "$MAPILLARY_TOKEN" ] || { echo "Falta el secreto MAPILLARY_TOKEN"; exit 1; }
-          python3 senales/mapillary_velocidad.py "-9.6,35.8,4.4,43.9;-18.3,27.5,-13.3,29.5" senales-velocidad.json.gz
-          N=$(zcat senales-velocidad.json.gz | wc -l); echo "N=$N" >> "$GITHUB_ENV"
-          [ "$N" -gt 20000 ] || { echo "Muy pocas señales ($N): no se publica"; exit 1; }
-          ls -lh senales-velocidad.json.gz
+          python3 senales/mapillary_velocidad.py "-9.6,35.8,4.4,43.9;-18.3,27.5,-13.3,29.5" senales-velocidad.json.gz estado.json.gz
+          ls -lh senales-velocidad.json.gz estado.json.gz
+      - name: Guardar el estado
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view senales-estado >/dev/null 2>&1 || gh release create senales-estado --latest=false \
+            --title "Señales de velocidad · estado" --notes "Lo bajado de Mapillary hasta ahora (uso interno). © Mapillary, CC BY-SA 4.0."
+          gh release upload senales-estado estado.json.gz --clobber
       - name: Publicar
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release delete senales-velocidad --yes --cleanup-tag 2>/dev/null || true
-          gh release create senales-velocidad senales-velocidad.json.gz --latest=false \
-            --title "Señales de velocidad · $(date -u +%d/%m/%Y)" \
-            --notes "Señales de velocidad máxima y fin de velocidad máxima detectadas por Mapillary en España, Portugal, Andorra y Canarias, con su sentido. $N señales. © Mapillary, CC BY-SA 4.0."
+          [ "${N:-0}" -gt 500 ] || { echo "Muy pocas señales (${N:-0}): no se publica"; exit 0; }
+          gh release view senales-velocidad >/dev/null 2>&1 || gh release create senales-velocidad --latest=false \
+            --title "Señales de velocidad" --notes "Señales de velocidad máxima de Mapillary."
+          gh release upload senales-velocidad senales-velocidad.json.gz --clobber
+          gh release edit senales-velocidad --title "Señales de velocidad · $(date -u +%d/%m/%Y)" \
+            --notes "Señales de velocidad máxima y fin de velocidad máxima detectadas por Mapillary en España, Portugal, Andorra y Canarias, con su sentido. $N señales; teselas repasadas $HECHAS de $TOTAL. © Mapillary, CC BY-SA 4.0."
