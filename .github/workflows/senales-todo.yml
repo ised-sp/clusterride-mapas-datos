@@ -1,0 +1,53 @@
+# Señales y marcas viales de Mapillary por su API de entidades (velocidad, peligros, adelantar, cruces y flechas).
+# Sigue donde se quedó (estado en la versión «senales-estado») y, si no ha acabado, se vuelve a lanzar sola.
+# Publica senales-velocidad.json.gz y senales-ruta.json.gz en la versión «senales-velocidad». © Mapillary, CC BY-SA 4.0.
+name: Señales de Mapillary (todo)
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: senales
+  cancel-in-progress: false
+jobs:
+  senales:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - name: Programas
+        run: pip install --quiet mapbox-vector-tile
+      - name: Estado
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download senales-estado -p estado.json.gz
+      - name: Señales
+        env:
+          MAPILLARY_TOKEN: ${{ secrets.MAPILLARY_TOKEN }}
+          HILOS: "192"
+          TIEMPO_MAX: "18000"
+        run: |
+          python3 senales/mapillary_graph.py estado.json.gz senales-velocidad.json.gz senales-ruta.json.gz
+          ls -lh estado.json.gz senales-velocidad.json.gz senales-ruta.json.gz
+      - name: Guardar y publicar
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          [ -f senales-ruta.json.gz ] || exit 0
+          gh release upload senales-estado estado.json.gz --clobber
+          gh release upload senales-velocidad senales-velocidad.json.gz senales-ruta.json.gz --clobber
+          gh release edit senales-velocidad --title "Señales de Mapillary · $(date -u +%d/%m/%Y)" \
+            --notes "Señales de velocidad ($N) y señales y marcas de la ruta ($NR: peligros, prohibido adelantar, stop, ceda, semáforos, pasos, flechas) detectadas por Mapillary, con su sentido. Teselas repasadas $HECHAS de $TOTAL. © Mapillary, CC BY-SA 4.0."
+      - name: Seguir si falta
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${HECHAS:-0}" -lt "${TOTAL:-0}" ]; then
+            gh api -X POST repos/${{ github.repository }}/actions/workflows/senales-todo.yml/dispatches -f ref=main
+          fi
