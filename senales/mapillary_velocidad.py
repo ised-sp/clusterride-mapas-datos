@@ -108,8 +108,15 @@ def covered_z14(box):
 
         for f in lay["features"]:
             g = f["geometry"]
-            lines = g["coordinates"] if g["type"] == "MultiLineString" else [g["coordinates"]]
+            if g["type"] == "MultiLineString":
+                lines = g["coordinates"]
+            elif g["type"] == "LineString":
+                lines = [g["coordinates"]]
+            else:
+                continue
             for ln in lines:
+                if not ln or not isinstance(ln[0], (list, tuple)):
+                    continue
                 for (ax, ay), (bx, by) in zip(ln, ln[1:]):
                     m = max(1, int(math.hypot(bx - ax, by - ay) / step))
                     for i in range(m):
