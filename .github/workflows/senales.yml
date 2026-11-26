@@ -1,0 +1,42 @@
+# Señales de velocidad de Mapillary (España, Portugal, Andorra y Canarias) para el límite de cada punto de la carretera
+# en ClusterRide. Cada mes y a mano. Necesita el secreto MAPILLARY_TOKEN (Client Token de Mapillary, solo lectura).
+# Se publica en la versión fija «senales-velocidad»:
+# https://github.com/ised-sp/clusterride-mapas-datos/releases/download/senales-velocidad/senales-velocidad.json.gz
+# Datos de Mapillary, CC BY-SA 4.0 («© Mapillary»).
+name: Señales de velocidad (Mapillary)
+on:
+  schedule:
+    - cron: "17 2 7 * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: senales
+  cancel-in-progress: false
+jobs:
+  senales:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: Programas
+        run: pip install --quiet mapbox-vector-tile
+      - name: Señales
+        env:
+          MAPILLARY_TOKEN: ${{ secrets.MAPILLARY_TOKEN }}
+          HILOS: "32"
+        run: |
+          [ -n "$MAPILLARY_TOKEN" ] || { echo "Falta el secreto MAPILLARY_TOKEN"; exit 1; }
+          python3 senales/mapillary_velocidad.py "-9.6,35.8,4.4,43.9;-18.3,27.5,-13.3,29.5" senales-velocidad.json.gz
+          N=$(zcat senales-velocidad.json.gz | wc -l); echo "N=$N" >> "$GITHUB_ENV"
+          [ "$N" -gt 20000 ] || { echo "Muy pocas señales ($N): no se publica"; exit 1; }
+          ls -lh senales-velocidad.json.gz
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete senales-velocidad --yes --cleanup-tag 2>/dev/null || true
+          gh release create senales-velocidad senales-velocidad.json.gz --latest=false \
+            --title "Señales de velocidad · $(date -u +%d/%m/%Y)" \
+            --notes "Señales de velocidad máxima y fin de velocidad máxima detectadas por Mapillary en España, Portugal, Andorra y Canarias, con su sentido. $N señales. © Mapillary, CC BY-SA 4.0."
