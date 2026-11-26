@@ -1,13 +1,21 @@
-# Carriles para pintarlos en el mapa de ClusterRide (teselas PMTiles, capa «carriles») en toda Europa, cada dos meses
-# después del cruce con el IGN (espana.yml, el día 1) y a mano desde «Actions». Los países van en grupos en paralelo y al
-# final se juntan. Se publica en la versión fija «mapa-carriles»:
-# https://github.com/ised-sp/clusterride-mapas-datos/releases/download/mapa-carriles/carriles.pmtiles
-# El Plesk lo baja con carriles-mapa.sh (lo llama regiones.sh) a /opt/clusterride-mapas/datos/carriles.pmtiles.
+# Carriles realistas para el mapa de ClusterRide (teselas PMTiles, capa «carriles») en toda Europa, cada dos meses
+# después del cruce con el IGN (espana.yml, el día 1) y a mano desde «Actions». Los países van en grupos en paralelo:
+# cada grupo hace su geometría (mapa/carriles_reales.py: asfalto, rayas, cebreados, flechas…) y sus teselas, y al final
+# se juntan con tile-join. Se publica en la versión fija «mapa-carriles-2»:
+# https://github.com/ised-sp/clusterride-mapas-datos/releases/download/mapa-carriles-2/carriles2.pmtiles
+# (si pasa de 1,9 GB, en trozos carriles2.pmtiles.parte-aa, -ab…). El Plesk lo baja con carriles-mapa.sh.
+# Con «solo» (un grupo tal cual, p. ej. «spain portugal andorra») se hace solo ese grupo y se publica en
+# «mapa-carriles-2-prueba» (para mirarlo sin tocar el bueno).
 name: Mapa · carriles
 on:
   schedule:
     - cron: "41 5 3 */2 *"
   workflow_dispatch:
+    inputs:
+      solo:
+        description: "Solo este grupo (vacío = toda Europa)"
+        required: false
+        default: ""
 permissions:
   contents: write
 concurrency:
@@ -16,7 +24,7 @@ concurrency:
 jobs:
   paises:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 340
     strategy:
       fail-fast: false
       matrix:
@@ -33,12 +41,22 @@ jobs:
           - "romania bulgaria greece moldova"
           - "ukraine belarus"
     steps:
+      - name: ¿Este grupo?
+        id: toca
+        run: |
+          if [ -z "${{ inputs.solo }}" ] || [ "${{ inputs.solo }}" = "${{ matrix.grupo }}" ]; then echo "si=1" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
+        if: steps.toca.outputs.si
       - name: Programas
+        if: steps.toca.outputs.si
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool >/dev/null
-          pip install --quiet osmium
-      - name: Calzadas con carriles
+          pip install --quiet osmium shapely numpy
+          sudo apt-get install -y -qq tippecanoe >/dev/null 2>&1 || {
+            git clone -q --depth 1 https://github.com/felt/tippecanoe.git /tmp/tc && make -C /tmp/tc -j4 >/dev/null && sudo make -C /tmp/tc install >/dev/null; }
+          tippecanoe --version
+      - name: Carriles
+        if: steps.toca.outputs.si
         run: |
           mkdir -p trabajo salida
           curl -fsSL --retry 3 -o trabajo/espana-carriles.csv.gz https://github.com/${{ github.repository }}/releases/latest/download/espana-carriles.csv.gz || true
@@ -48,20 +66,27 @@ jobs:
             curl -fsSL --retry 5 --retry-all-errors --retry-delay 20 --max-time 3000 -o trabajo/p.osm.pbf https://download.geofabrik.de/europe/$p-latest.osm.pbf || \
             curl -fsSL --retry 5 --retry-all-errors --retry-delay 20 --max-time 3000 -o trabajo/p.osm.pbf https://download.openstreetmap.fr/extracts/europe/$p-latest.osm.pbf || { echo "SIN $p"; continue; }
             osmium tags-filter -O -o trabajo/vias.osm.pbf trabajo/p.osm.pbf \
-              w/highway=motorway,motorway_link,trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link,unclassified,residential
+              w/highway=motorway,motorway_link,trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link \
+              n/highway=traffic_signals,stop n/crossing=traffic_signals
             rm -f trabajo/p.osm.pbf
             n0=$(wc -l < salida/carriles.geojsonl)
-            python3 mapa/carriles_mapa.py trabajo/vias.osm.pbf trabajo/espana-carriles.csv.gz $mano >> salida/carriles.geojsonl
-            echo "$p: $(( $(wc -l < salida/carriles.geojsonl) - n0 )) calzadas"
+            python3 mapa/carriles_reales.py trabajo/vias.osm.pbf trabajo/espana-carriles.csv.gz ${mano:-derecha} >> salida/carriles.geojsonl
+            echo "$p: $(( $(wc -l < salida/carriles.geojsonl) - n0 )) elementos"
             rm -f trabajo/vias.osm.pbf
           done
-          gzip -1 salida/carriles.geojsonl
-          echo "N=$(echo '${{ matrix.grupo }}' | tr ' :' '__')" >> "$GITHUB_ENV"
+          ls -lh salida/carriles.geojsonl
+          N=$(echo '${{ matrix.grupo }}' | tr ' :' '__'); echo "N=$N" >> "$GITHUB_ENV"
+          tippecanoe -o salida/$N.pmtiles -l carriles -Z14 -z14 -d14 --no-feature-limit --no-tile-size-limit \
+            --no-tiny-polygon-reduction --no-line-simplification --force -P salida/carriles.geojsonl
+          rm -f salida/carriles.geojsonl
+          ls -lh salida/
       - uses: actions/upload-artifact@v4
+        if: steps.toca.outputs.si
         with:
           name: carriles-${{ env.N }}
-          path: salida/carriles.geojsonl.gz
+          path: salida/*.pmtiles
           retention-days: 2
+          compression-level: 0
   teselas:
     needs: paises
     if: always()
@@ -79,18 +104,25 @@ jobs:
       - name: Teselas
         run: |
           ls -la partes/*
-          zcat partes/*/carriles.geojsonl.gz > carriles.geojsonl
-          N=$(wc -l < carriles.geojsonl); echo "N=$N" >> "$GITHUB_ENV"; echo "$N calzadas"
-          [ "$N" -gt 100000 ] || { echo "Muy pocas calzadas: no se publica"; exit 1; }
-          tippecanoe -o carriles.pmtiles -l carriles -Z14 -z14 --no-feature-limit --no-tile-size-limit \
-            --attribution "© OpenStreetMap · Carriles: IGN (IGR-RT, CC BY 4.0)" --force -P carriles.geojsonl
-          ls -lh carriles.pmtiles
+          n=$(ls partes/*/*.pmtiles | wc -l); echo "$n grupos"
+          [ "$n" -gt 0 ] || { echo "Sin grupos"; exit 1; }
+          if [ -z "${{ inputs.solo }}" ] && [ "$n" -lt 9 ]; then echo "Faltan grupos: no se publica"; exit 1; fi
+          tile-join -o carriles2.pmtiles --no-tile-size-limit --force \
+            --attribution "© OpenStreetMap · Carriles: IGN (IGR-RT, CC BY 4.0)" partes/*/*.pmtiles
+          ls -lh carriles2.pmtiles
+          S=$(stat -c%s carriles2.pmtiles)
+          if [ "$S" -gt 1900000000 ]; then
+            split -b 1800000000 -a 2 carriles2.pmtiles carriles2.pmtiles.parte-
+            rm carriles2.pmtiles
+          fi
+          ls -lh carriles2.pmtiles* | tee lista.txt
       - name: Publicar
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release delete mapa-carriles --yes --cleanup-tag 2>/dev/null || true
-          gh release create mapa-carriles carriles.pmtiles --latest=false \
-            --title "Mapa · carriles · $(date -u +%d/%m/%Y)" \
-            --notes "Calzadas de Europa con su número de carriles (OpenStreetMap y, en España donde no los tiene, IGN) para el mapa de ClusterRide. $N calzadas."
+          TAG=mapa-carriles-2; [ -n "${{ inputs.solo }}" ] && TAG=mapa-carriles-2-prueba
+          gh release delete $TAG --yes --cleanup-tag 2>/dev/null || true
+          gh release create $TAG carriles2.pmtiles* --latest=false \
+            --title "Mapa · carriles realistas · $(date -u +%d/%m/%Y) ${{ inputs.solo }}" \
+            --notes "Carriles realistas de Europa para el mapa de ClusterRide (asfalto, rayas, cebreados y flechas), de OpenStreetMap y, en España donde no los tiene, del IGN. $(cat lista.txt | tr '\n' ' ')"
