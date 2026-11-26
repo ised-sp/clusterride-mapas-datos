@@ -773,11 +773,13 @@ class Network:
                               (b, face_b, b.sh_factorL if side == "R" else b.sh_factorR)):
             other = bl if ch is m else ml
             pts = ch.p + ch.nrm * edge[:, None]
-            for i in range(len(pts)):
-                if ch is m and not env.contains(Point(pts[i])):
-                    continue
-                d = other.distance(Point(pts[i]))
-                fac[i] = min(fac[i], float(smooth((d - 0.3) / 3.0)))
+            sel = np.ones(len(pts), bool)
+            if ch is m:
+                sel = shapely.contains_xy(env, pts[:, 0], pts[:, 1])
+            if not sel.any():
+                continue
+            d = shapely.distance(other, shapely.points(pts[sel]))
+            fac[sel] = np.minimum(fac[sel], smooth((d - 0.3) / 3.0))
 
     # --- geometría -----------------------------------------------------------------------------------------------
     def build(self):
@@ -892,10 +894,11 @@ class Network:
             if len(lvs) > 1:
                 trans_zones.append(Point(self.P[nd]).buffer(14))
         for (lv, tun), items in sorted(levels.items()):
-            u = unary_union([p for p, _ in items])
+            polys_lv = [p for p, _ in items]
+            u = unary_union(polys_lv)
             # cierra las rendijas entre calzadas pegadas (sin rayas de contorno dentro del asfalto)
             u = u.buffer(0.35, join_style=2).buffer(-0.35, join_style=2)
-            fl = self.fillets(u, lv)
+            fl = self.fillets(polys_lv, lv)
             fill = unary_union([f for f, _ in fl]) if fl else None
             full = u if fill is None else unary_union([u, fill]).buffer(0.05).buffer(-0.05)
             out.add_poly(full, "asfalto", lv=lv, tu=int(tun))
@@ -913,8 +916,9 @@ class Network:
             out.add_line(bnd, "contorno", lv=lv, tu=int(tun), w=0.25)
         return out
 
-    def fillets(self, u, lv):
+    def fillets(self, polys, lv):
         pieces = []
+        tree = STRtree(polys)
         for nd, items in self.junction_nodes:
             if not any(c.lv[i] == lv for c, i, _ in items):
                 continue
@@ -922,7 +926,10 @@ class Network:
             low = min(items, key=lambda x: x[0].rank)[0]
             r = 3.5
             disk = Point(self.P[nd]).buffer(28)
-            local = u.intersection(disk)
+            near = [polys[k] for k in tree.query(disk, predicate="intersects")]
+            if not near:
+                continue
+            local = unary_union(near).intersection(disk)
             if local.is_empty:
                 continue
             closed = local.buffer(r, join_style=1).buffer(-r, join_style=1)
@@ -1297,12 +1304,12 @@ def order_lr(c, ci, o1, o2, at):
 
 
 def nearest_s(sl, target, idxs):
-    best, bd = None, 1e9
-    for i in idxs:
-        d = abs(sl[i] - target)
-        if d < bd:
-            best, bd = i, d
-    return best if bd < 4 else None
+    idxs = np.asarray(list(idxs) if not isinstance(idxs, range) else np.arange(idxs.start, idxs.stop, idxs.step or 1))
+    if len(idxs) == 0:
+        return None
+    d = np.abs(np.asarray(sl)[idxs] - target)
+    k = int(np.argmin(d))
+    return int(idxs[k]) if d[k] < 4 else None
 
 
 def runs(ch):

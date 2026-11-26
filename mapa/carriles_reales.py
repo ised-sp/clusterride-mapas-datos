@@ -95,9 +95,13 @@ class MirrorProj(G.Proj):
         return super().inv(-np.asarray(x), y)
 
 
+MAXW = 3000          # vías como mucho por celda: las de más (centros de ciudad) se parten en cuatro
+
+
 def celda(args):
-    i, j, idx = args
-    lon0, lat0 = i * CELL, j * CELL
+    lon0, lat0, size, idx = args
+    t0 = time.time()
+    i, j = lon0, lat0
     try:
         nodes = {}
         ways = []
@@ -107,12 +111,12 @@ def celda(args):
                 nodes[r] = (a, b)
             ways.append((wid, refs.tolist(), tags))
         nt = {r: NTAGS[r] for r in nodes if r in NTAGS}
-        cx, cy = lon0 + CELL / 2, lat0 + CELL / 2
+        cx, cy = lon0 + size / 2, lat0 + size / 2
         proj = MirrorProj(cx, cy) if IZQ else G.Proj(cx, cy)
         net = G.Network(nodes, nt, ways, proj)
         out = net.build()
         # recorte a la celda (sin el margen)
-        corners = [proj(lon0, lat0), proj(lon0 + CELL, lat0 + CELL)]
+        corners = [proj(lon0, lat0), proj(lon0 + size, lat0 + size)]
         xs = sorted(c[0] for c in corners); ys = sorted(c[1] for c in corners)
         clip = box(xs[0], ys[0], xs[1], ys[1])
         lines = []
@@ -130,9 +134,28 @@ def celda(args):
             props = {k: (round(v, 2) if isinstance(v, float) else v) for k, v in props.items() if k in ("t", "lv", "tu", "w", "d")}
             lines.append(json.dumps({"type": "Feature", "properties": props,
                                      "geometry": shapely.geometry.mapping(g2)}, separators=(",", ":")))
+        dt = time.time() - t0
+        if dt > 120:
+            print(f"  celda lenta {lon0:.3f},{lat0:.3f} ({size:g}°, {len(idx)} vías): {dt:.0f} s", file=sys.stderr, flush=True)
         return i, j, lines, None
     except Exception:
         return i, j, [], traceback.format_exc()[-1500:]
+
+
+def partir(lon0, lat0, size, idx, bb):
+    """Celdas de como mucho MAXW vías: las muy llenas se parten en cuatro (hasta 0,01°)."""
+    if len(idx) <= MAXW or size <= 0.0101:
+        return [(lon0, lat0, size, idx)]
+    h = size / 2
+    out = []
+    for a in (0, 1):
+        for b in (0, 1):
+            x0, y0 = lon0 + a * h, lat0 + b * h
+            sub = [k for k in idx if bb[k][0] <= x0 + h + MARGIN and bb[k][2] >= x0 - MARGIN
+                   and bb[k][1] <= y0 + h + MARGIN and bb[k][3] >= y0 - MARGIN]
+            if sub:
+                out += partir(x0, y0, h, sub, bb)
+    return out
 
 
 def main():
@@ -151,8 +174,14 @@ def main():
     for k, (wid, refs, lon, lat, tags) in enumerate(WAYS):
         for a, b in zip(np.floor(lon / CELL).astype(int).tolist(), np.floor(lat / CELL).astype(int).tolist()):
             core.add((a, b))
-    jobs = [(i, j, cells[(i, j)]) for (i, j) in cells if (i, j) in core]
-    jobs.sort(key=lambda x: -len(x[2]))
+    bb = [(lon.min(), lat.min(), lon.max(), lat.max()) for (wid, refs, lon, lat, tags) in WAYS]
+    jobs = []
+    for (i, j) in cells:
+        if (i, j) in core:
+            jobs += partir(i * CELL, j * CELL, CELL, cells[(i, j)], bb)
+    jobs.sort(key=lambda x: -len(x[3]))
+    if jobs:
+        print(f"la más llena: {len(jobs[0][3])} vías", file=sys.stderr)
     print(f"celdas: {len(jobs)}", file=sys.stderr)
     n = 0
     errs = 0
@@ -161,7 +190,7 @@ def main():
         for k, (i, j, lines, err) in enumerate(pool.imap_unordered(celda, jobs, chunksize=1)):
             if err:
                 errs += 1
-                print(f"ERROR celda {i},{j}: {err}", file=sys.stderr)
+                print(f"ERROR celda {i:.3f},{j:.3f}: {err}", file=sys.stderr)
             for ln in lines:
                 sys.stdout.write(ln + "\n")
             n += len(lines)
