@@ -30,7 +30,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release download senales-estado -p estado.json.gz || echo "Sin estado: se empieza de cero"
+        run: |
+          gh release download senales-estado -p estado.json.gz || echo "Sin estado, se empieza de cero"
       - name: Señales
         env:
           MAPILLARY_TOKEN: ${{ secrets.MAPILLARY_TOKEN }}
