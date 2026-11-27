@@ -1,0 +1,109 @@
+# Carriles realistas de España, Portugal y Andorra (los países que cubren los mapas de ClusterRide) troceados en 20
+# trabajos en paralelo: en uno solo, España no cabe en las 6 h de un trabajo de GitHub (≈10 s por celda y unas 9.500
+# celdas). Un trabajo prepara las vías de cada país, los 20 hacen cada uno su parte de las celdas
+# (PARTE=k/20 en mapa/carriles_reales.py) y sus teselas, y el último las junta con tile-join y publica en la versión
+# «mapa-carriles-2» (la que baja el Plesk con carriles-mapa.sh). Repositorio público: los minutos no cuestan.
+name: Mapa · carriles · España
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: carriles-mapa
+  cancel-in-progress: false
+jobs:
+  vias:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Vías de cada país
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool >/dev/null
+          mkdir -p vias
+          curl -fsSL --retry 3 -o vias/espana-carriles.csv.gz https://github.com/${{ github.repository }}/releases/latest/download/espana-carriles.csv.gz || true
+          for p in spain portugal andorra; do
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 20 --max-time 3000 -o p.osm.pbf https://download.geofabrik.de/europe/$p-latest.osm.pbf || \
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 20 --max-time 3000 -o p.osm.pbf https://download.openstreetmap.fr/extracts/europe/$p-latest.osm.pbf
+            osmium tags-filter -O -o vias/$p.osm.pbf p.osm.pbf \
+              w/highway=motorway,motorway_link,trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link \
+              n/highway=traffic_signals,stop n/crossing=traffic_signals
+            rm -f p.osm.pbf
+          done
+          ls -lh vias
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vias
+          path: vias/
+          retention-days: 2
+          compression-level: 0
+  partes:
+    needs: vias
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix:
+        parte: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: vias
+          path: vias
+      - name: Programas
+        run: |
+          pip install --quiet osmium shapely numpy
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tippecanoe >/dev/null 2>&1 || {
+            git clone -q --depth 1 https://github.com/felt/tippecanoe.git /tmp/tc && make -C /tmp/tc -j4 >/dev/null && sudo make -C /tmp/tc install >/dev/null; }
+      - name: Carriles
+        run: |
+          mkdir -p salida
+          : > salida/c.geojsonl
+          for p in spain portugal andorra; do
+            PARTE=${{ matrix.parte }}/20 python3 mapa/carriles_reales.py vias/$p.osm.pbf vias/espana-carriles.csv.gz derecha >> salida/c.geojsonl
+          done
+          wc -l salida/c.geojsonl
+          tippecanoe -o salida/p${{ matrix.parte }}.pmtiles -l carriles -Z14 -z14 -d14 --no-feature-limit --no-tile-size-limit \
+            --no-tiny-polygon-reduction --no-line-simplification --force -P salida/c.geojsonl
+          rm -f salida/c.geojsonl
+          ls -lh salida
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parte-${{ matrix.parte }}
+          path: salida/*.pmtiles
+          retention-days: 2
+          compression-level: 0
+  teselas:
+    needs: partes
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: parte-*
+          path: partes
+      - name: Programas
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tippecanoe >/dev/null 2>&1 || {
+            git clone -q --depth 1 https://github.com/felt/tippecanoe.git /tmp/tc && make -C /tmp/tc -j4 >/dev/null && sudo make -C /tmp/tc install >/dev/null; }
+      - name: Teselas
+        run: |
+          n=$(ls partes/*/*.pmtiles | wc -l); echo "$n partes de 20"
+          [ "$n" -eq 20 ] || { echo "Faltan partes: no se publica"; exit 1; }
+          tile-join -o carriles2.pmtiles --no-tile-size-limit --force \
+            --attribution "© OpenStreetMap · Carriles: IGN (IGR-RT, CC BY 4.0)" partes/*/*.pmtiles
+          S=$(stat -c%s carriles2.pmtiles)
+          if [ "$S" -gt 1900000000 ]; then split -b 1800000000 -a 2 carriles2.pmtiles carriles2.pmtiles.parte-; rm carriles2.pmtiles; fi
+          ls -lh carriles2.pmtiles* | tee lista.txt
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete mapa-carriles-2 --yes --cleanup-tag 2>/dev/null || true
+          gh release create mapa-carriles-2 carriles2.pmtiles* --latest=false \
+            --title "Mapa · carriles realistas · España, Portugal y Andorra · $(date -u +%d/%m/%Y)" \
+            --notes "Carriles realistas (asfalto, rayas, cebreados y flechas) de OpenStreetMap y, en España donde no los tiene, del IGN. $(cat lista.txt | tr '\n' ' ')"

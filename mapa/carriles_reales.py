@@ -180,6 +180,12 @@ def main():
         if (i, j) in core:
             jobs += partir(i * CELL, j * CELL, CELL, cells[(i, j)], bb)
     jobs.sort(key=lambda x: -len(x[3]))
+    # PARTE=k/N: solo una de N partes (por turnos sobre las celdas ordenadas, para que todas pesen lo mismo).
+    parte = os.environ.get("PARTE", "")
+    if "/" in parte:
+        k0, nparts = (int(x) for x in parte.split("/"))
+        jobs = jobs[k0::nparts]
+        print(f"parte {k0 + 1} de {nparts}", file=sys.stderr)
     if jobs:
         print(f"la más llena: {len(jobs[0][3])} vías", file=sys.stderr)
     print(f"celdas: {len(jobs)}", file=sys.stderr)
