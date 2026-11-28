@@ -1141,7 +1141,9 @@ def fix_roundabouts(base, body, out):
                 continue
             req = {"encoded_polyline": lg["shape"], "costing": costing, "shape_match": "edge_walk",
                    "filters": {"attributes": ["edge.roundabout", "edge.begin_shape_index", "edge.end_shape_index",
-                                              "node.intersecting_edge.driveability", "node.intersecting_edge.road_class"],
+                                              "edge.length", "edge.begin_heading",
+                                              "node.intersecting_edge.driveability", "node.intersecting_edge.road_class",
+                                              "node.intersecting_edge.begin_heading"],
                                "action": "include"}}
             code, _, t = forward(base, "/trace_attributes", "", json.dumps(req).encode(), "application/json")
             if code != 200:
@@ -1151,14 +1153,40 @@ def fix_roundabouts(base, body, out):
                 if m.get("type") != 26 or i + 1 >= len(ms):
                     continue
                 b, e = m.get("begin_shape_index", 0), ms[i + 1].get("begin_shape_index", 0)
-                rb = [x for x in E if x.get("roundabout") and x.get("begin_shape_index", -1) >= b and x.get("end_shape_index", 1 << 30) <= e]
-                if not rb:
+                idx = [k for k, x in enumerate(E) if x.get("roundabout") and x.get("begin_shape_index", -1) >= b
+                       and x.get("end_shape_index", 1 << 30) <= e]
+                if not idx:
                     continue
+                rb = [E[k] for k in idx]
                 n = 1
                 for x in rb[:-1]:
                     for y in (x.get("end_node") or {}).get("intersecting_edges", []):
                         if y.get("driveability") in ("forward", "both"):
                             n += 1
+                # Una salida que se separa de la nuestra nada más dejar la rotonda (a menos de 35 m: la vía de servicio de
+                # la rotonda del Lobo Cojo, en Collado Villalba) se ve como otra salida de la rotonda: cuenta si queda
+                # antes que la nuestra (a su derecha; a su izquierda donde se conduce por la izquierda).
+                try:
+                    pts = decode6(lg["shape"])
+                    la, lo = pts[min(b, len(pts) - 1)]
+                    left = country(la, lo) in ("GB", "IE", "CY", "MT")
+                except Exception:
+                    left = False
+                run, k = 0.0, idx[-1]
+                while k + 1 < len(E) and run < 35:
+                    run += (E[k].get("length") or 0) * 1000 if k != idx[-1] else 0
+                    nxt = E[k + 1]
+                    if nxt.get("roundabout") or run >= 35:
+                        break
+                    hn = nxt.get("begin_heading")
+                    for y in (E[k].get("end_node") or {}).get("intersecting_edges", []):
+                        hy = y.get("begin_heading")
+                        if y.get("driveability") not in ("forward", "both") or hn is None or hy is None:
+                            continue
+                        dd = (hy - hn + 540) % 360 - 180   # > 0: a la derecha de la nuestra
+                        if (-100 < dd < 0) if left else (0 < dd < 100):   # no un cambio de sentido
+                            n += 1
+                    k += 1
                 old = m.get("roundabout_exit_count")
                 if isinstance(old, int) and old != n:
                     m["roundabout_exit_count"] = n
