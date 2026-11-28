@@ -1,0 +1,55 @@
+# Todos los radares para ClusterRide (DGT, Servei Català de Trànsit, Ayuntamiento de Madrid y OpenStreetMap de Europa),
+# con su tipo (fijo, tramo, semáforo, remolque), en un solo JSON. Todos los días y a mano.
+# Se publica en la rama «radares»: https://raw.githubusercontent.com/ised-sp/clusterride-mapas-datos/radares/radares.json
+# (la base de datos de ClusterRide lo baja con pg_net: app.ride_cameras_fetch). En la rama queda también lo último
+# bueno de cada país de OpenStreetMap (cache/), que se usa si Overpass no responde.
+# Datos: DGT (Punto de Acceso Nacional), Servei Català de Trànsit, Ayuntamiento de Madrid (CC BY 4.0) y
+# © colaboradores de OpenStreetMap (ODbL).
+name: Radares
+on:
+  schedule:
+    - cron: "40 1 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: radares
+  cancel-in-progress: false
+jobs:
+  radares:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lo publicado antes
+        run: |
+          git fetch origin radares:radares 2>/dev/null && git worktree add pub radares || { mkdir pub; }
+          mkdir -p pub/cache
+      - name: Programas
+        run: pip install --quiet pyproj
+      - name: Radares
+        env:
+          CACHE: pub/cache
+        run: |
+          python3 radares/radares.py nuevo.json
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open("nuevo.json"))
+          c = d["counts"]
+          ok = c.get("dgt", 0) > 500 and c.get("osm", 0) > 5000
+          print("Recuento:", c, d["kinds"], "→", "se publica" if ok else "NO se publica")
+          open("ok", "w").write("1" if ok else "0")
+          PY
+      - name: Publicar
+        run: |
+          [ "$(cat ok)" = "1" ] || exit 0
+          cp nuevo.json pub/radares.json
+          cd pub
+          if [ ! -d .git ] && [ ! -f .git ]; then git init -q -b radares && git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898341+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Radares $(date -u +%F)" || { echo "Sin cambios"; exit 0; }
+          # una sola versión en la rama (no crece con cada día)
+          git checkout -q --orphan nueva && git commit -q -m "Radares $(date -u +%F)" && git branch -D radares 2>/dev/null; git branch -m radares
+          git -c http.extraheader="AUTHORIZATION: bearer ${{ github.token }}" push -f origin radares
