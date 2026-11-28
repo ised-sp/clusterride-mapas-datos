@@ -1112,7 +1112,8 @@ def fill_limits(out, pts, drop_shape=False):
 # ---- Salidas de las rotondas -------------------------------------------------------------------------------------
 # Valhalla cuenta mal algunas rotondas (28/11/2026: la de la M-601 con la Avenida de Buenos Aires en Collado Mediano,
 # que es la primera salida, la daba como la segunda). Se recuentan con el trazado: 1 + las salidas por las que se pasa
-# dentro de la rotonda (vías que salen de ella, sin contar los accesos de servicio: gasolineras, aparcamientos…).
+# dentro de la rotonda. Cuentan TODAS las que se pueden tomar: vías de servicio, caminos de tierra, gasolineras…
+# (decisión del usuario: en la de la gasolinera de Collado Mediano la ruta va por la tercera).
 RB_FIX = os.environ.get("ROTONDAS", "1") == "1"
 ORD_ES = ["primera", "segunda", "tercera", "cuarta", "quinta", "sexta", "séptima", "octava", "novena", "décima"]
 
@@ -1156,7 +1157,7 @@ def fix_roundabouts(base, body, out):
                 n = 1
                 for x in rb[:-1]:
                     for y in (x.get("end_node") or {}).get("intersecting_edges", []):
-                        if y.get("driveability") in ("forward", "both") and y.get("road_class") != "service_other":
+                        if y.get("driveability") in ("forward", "both"):
                             n += 1
                 old = m.get("roundabout_exit_count")
                 if isinstance(old, int) and old != n:
